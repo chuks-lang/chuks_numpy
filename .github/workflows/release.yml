@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish-source:
+    name: Publish source tarball
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install chuks CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/chuks-programming-language/chuks/releases/latest/download/chuks-linux-x86_64.tar.gz \
+            | tar -xz -C /tmp
+          mkdir -p "$HOME/chuks/bin"
+          mv /tmp/chuks "$HOME/chuks/bin/chuks"
+          chmod +x "$HOME/chuks/bin/chuks"
+          echo "$HOME/chuks/bin" >> "$GITHUB_PATH"
+
+      - name: Verify chuks.json version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG_VER=$(jq -r .version chuks.json)
+          if [[ "$TAG" != "$PKG_VER" ]]; then
+            echo "::error::tag v$TAG does not match chuks.json version $PKG_VER" >&2
+            exit 1
+          fi
+
+      - name: Publish source
+        shell: bash
+        env:
+          CHUKS_TOKEN: ${{ secrets.CHUKS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # If the version already exists in the registry, exit 0 — prebuilt
+          # jobs can still proceed.
+          if chuks publish 2>&1 | tee /tmp/pub.log; then
+            echo "Source published."
+          else
+            if grep -qi "already exists\|409" /tmp/pub.log; then
+              echo "Source version already published — continuing to prebuilts."
+            else
+              cat /tmp/pub.log
+              exit 1
+            fi
+          fi
+
+  publish-prebuilts:
+    name: Publish prebuilts
+    needs: publish-source
+    uses: chuks-programming-language/shim-publish-action/.github/workflows/build.yml@v1
+    with:
+      shim-dir: shim
+      release: true
+    secrets:
+      CHUKS_TOKEN: ${{ secrets.CHUKS_TOKEN }}
