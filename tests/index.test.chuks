@@ -1,0 +1,492 @@
+// chuks_numpy smoke test — Phase NU0 scaffold.
+//
+// Run with:
+//   cd /Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy
+//   chuks run tests/index.test.chuks
+
+import { NumPy, NDArray } from "../src/index.chuks"
+
+const SHIM_DIR: string = "/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy/shim"
+
+var passed: int = 0
+var failed: int = 0
+
+function assert(label: string, condition: bool): void {
+    if (condition) {
+        println("  PASS: " + label)
+        passed = passed + 1
+    } else {
+        println("  FAIL: " + label)
+        failed = failed + 1
+    }
+}
+
+function assertEq(label: string, actual: any, expected: any): void {
+    if (string(actual) == string(expected)) {
+        println("  PASS: " + label)
+        passed = passed + 1
+    } else {
+        println("  FAIL: " + label + " — expected " + string(expected) + ", got " + string(actual))
+        failed = failed + 1
+    }
+}
+
+function contains(haystack: string, needle: string): bool {
+    return haystack.indexOf(needle) >= 0
+}
+
+// ─── Init ──────────────────────────────────────────────────────────
+const np: NumPy = new NumPy(SHIM_DIR)
+
+println("=== Test 1: version ===")
+const v: string = np.version()
+assert("version contains ndarray 0.16", contains(v, "ndarray 0.16"))
+assert("version contains crate name", contains(v, "chuks_numpy_shim"))
+
+// ─── Test 2: zeros + shape/rank/len ───────────────────────────────
+println("=== Test 2: zeros 2x3 ===")
+const a: NDArray = np.zeros([2, 3])
+assertEq("rank", a.rank(), 2)
+assertEq("len", a.len(), 6)
+assertEq("dim(0)", a.dim(0), 2)
+assertEq("dim(1)", a.dim(1), 3)
+const sh: []int = a.shape()
+assertEq("shape[0]", sh[0], 2)
+assertEq("shape[1]", sh[1], 3)
+assertEq("get([0,0]) is 0.0", a.get([0, 0]), 0.0)
+
+// ─── Test 3: set/get round-trip ───────────────────────────────────
+println("=== Test 3: set/get ===")
+assert("set ok", a.set([0, 1], 3.14))
+assertEq("get([0,1])", a.get([0, 1]), 3.14)
+assert("set([1,2]) ok", a.set([1, 2], -42.5))
+assertEq("get([1,2])", a.get([1, 2]), -42.5)
+assertEq("get([0,0]) still 0", a.get([0, 0]), 0.0)
+
+// ─── Test 4: out-of-range set returns false ───────────────────────
+println("=== Test 4: bounds ===")
+assert("set([2,0]) rejected", a.set([2, 0], 1.0) == false)
+assert("set([0,3]) rejected", a.set([0, 3], 1.0) == false)
+assertEq("dim(5) out of range = -1", a.dim(5), -1)
+
+a.close()
+
+// ─── Test 5: 1-D and 3-D shapes ───────────────────────────────────
+println("=== Test 5: other shapes ===")
+const v1: NDArray = np.zeros([5])
+assertEq("1-D rank", v1.rank(), 1)
+assertEq("1-D len", v1.len(), 5)
+v1.close()
+
+const t3: NDArray = np.zeros([2, 2, 2])
+assertEq("3-D rank", t3.rank(), 3)
+assertEq("3-D len", t3.len(), 8)
+assert("3-D set ok", t3.set([1, 0, 1], 9.0))
+assertEq("3-D get", t3.get([1, 0, 1]), 9.0)
+t3.close()
+
+// ─── Test 6: close() is idempotent ────────────────────────────────
+println("=== Test 6: double close ===")
+const z: NDArray = np.zeros([1])
+z.close()
+z.close()
+assert("double close ok", true)
+
+// ─── NU1: constructors ────────────────────────────────────────────
+// Wrapped in functions to avoid the IR slot-collision issue with very
+// large top-level scripts.
+
+function nu1Constructors(np: NumPy): void {
+    println("=== NU1: ones ===")
+    const o: NDArray = np.ones([2, 3])
+    assertEq("ones rank", o.rank(), 2)
+    assertEq("ones len", o.len(), 6)
+    assertEq("ones[0,0]", o.get([0, 0]), 1.0)
+    assertEq("ones[1,2]", o.get([1, 2]), 1.0)
+    o.close()
+
+    println("=== NU1: full ===")
+    const f: NDArray = np.full([2, 2], 7.5)
+    assertEq("full[0,0]", f.get([0, 0]), 7.5)
+    assertEq("full[1,1]", f.get([1, 1]), 7.5)
+    f.close()
+
+    println("=== NU1: arange ===")
+    const ar: NDArray = np.arange(0.0, 5.0, 1.0)
+    assertEq("arange len", ar.len(), 5)
+    assertEq("arange[0]", ar.get([0]), 0.0)
+    assertEq("arange[4]", ar.get([4]), 4.0)
+    ar.close()
+
+    const ar2: NDArray = np.arange(0.0, 1.0, 0.25)
+    assertEq("arange 0.25 step len", ar2.len(), 4)
+    assertEq("arange[3]", ar2.get([3]), 0.75)
+    ar2.close()
+
+    const arEmpty: NDArray = np.arange(5.0, 5.0, 1.0)
+    assertEq("arange empty len", arEmpty.len(), 0)
+    arEmpty.close()
+
+    println("=== NU1: linspace ===")
+    const ls: NDArray = np.linspace(0.0, 1.0, 5)
+    assertEq("linspace len", ls.len(), 5)
+    assertEq("linspace[0]", ls.get([0]), 0.0)
+    assertEq("linspace[4]", ls.get([4]), 1.0)
+    assertEq("linspace[2]", ls.get([2]), 0.5)
+    ls.close()
+
+    const ls1: NDArray = np.linspace(3.0, 9.0, 1)
+    assertEq("linspace n=1 len", ls1.len(), 1)
+    assertEq("linspace n=1 val", ls1.get([0]), 3.0)
+    ls1.close()
+
+    println("=== NU1: eye ===")
+    const e3: NDArray = np.eye(3)
+    assertEq("eye rank", e3.rank(), 2)
+    assertEq("eye[0,0]", e3.get([0, 0]), 1.0)
+    assertEq("eye[1,1]", e3.get([1, 1]), 1.0)
+    assertEq("eye[2,2]", e3.get([2, 2]), 1.0)
+    assertEq("eye[0,1]", e3.get([0, 1]), 0.0)
+    assertEq("eye[2,0]", e3.get([2, 0]), 0.0)
+    e3.close()
+}
+
+function nu1FromData(np: NumPy): void {
+    println("=== NU1: from1d + toFloats ===")
+    const fd1: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0])
+    const tf1: []float = fd1.toFloats()
+    assertEq("from1d toFloats len", tf1.length, 4)
+    assertEq("from1d toFloats[0]", tf1[0], 1.0)
+    assertEq("from1d toFloats[3]", tf1[3], 4.0)
+    fd1.close()
+
+    println("=== NU1: from2d ===")
+    const fd2: NDArray = np.from2d([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assertEq("from2d rank", fd2.rank(), 2)
+    assertEq("from2d dim0", fd2.dim(0), 2)
+    assertEq("from2d dim1", fd2.dim(1), 3)
+    assertEq("from2d[1,2]", fd2.get([1, 2]), 6.0)
+    const tf2: []float = fd2.toFloats()
+    assertEq("from2d toFloats len", tf2.length, 6)
+    assertEq("from2d toFloats[0]", tf2[0], 1.0)
+    assertEq("from2d toFloats[5]", tf2[5], 6.0)
+    fd2.close()
+}
+
+function nu1Transforms(np: NumPy): void {
+    println("=== NU1: reshape ===")
+    const re0: NDArray = np.arange(0.0, 6.0, 1.0)
+    const re1: NDArray = re0.reshape([2, 3])
+    assertEq("reshape rank", re1.rank(), 2)
+    assertEq("reshape dim0", re1.dim(0), 2)
+    assertEq("reshape dim1", re1.dim(1), 3)
+    assertEq("reshape[0,0]", re1.get([0, 0]), 0.0)
+    assertEq("reshape[1,2]", re1.get([1, 2]), 5.0)
+    re0.close()
+    re1.close()
+
+    println("=== NU1: reshape invalid product ===")
+    const re2: NDArray = np.arange(0.0, 6.0, 1.0)
+    var reshapeThrew: bool = false
+    try {
+        const re3: NDArray = re2.reshape([2, 4])
+        re3.close()
+    } catch (e) {
+        reshapeThrew = true
+    }
+    assert("reshape invalid throws", reshapeThrew)
+    re2.close()
+
+    println("=== NU1: transpose 2D ===")
+    const tr0: NDArray = np.from2d([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    const tr1: NDArray = tr0.transpose()
+    assertEq("transpose dim0", tr1.dim(0), 3)
+    assertEq("transpose dim1", tr1.dim(1), 2)
+    assertEq("transpose[0,0]", tr1.get([0, 0]), 1.0)
+    assertEq("transpose[2,1]", tr1.get([2, 1]), 6.0)
+    tr0.close()
+    tr1.close()
+}
+
+function nu1Indexing(np: NumPy): void {
+    println("=== NU1: slice 1D ===")
+    const sl0: NDArray = np.arange(0.0, 10.0, 1.0)
+    const sl1: NDArray = sl0.slice([2], [7], [1])
+    assertEq("slice len", sl1.len(), 5)
+    assertEq("slice[0]", sl1.get([0]), 2.0)
+    assertEq("slice[4]", sl1.get([4]), 6.0)
+    sl1.close()
+
+    const sl2: NDArray = sl0.slice([0], [10], [2])
+    assertEq("slice step=2 len", sl2.len(), 5)
+    assertEq("slice step=2[2]", sl2.get([2]), 4.0)
+    sl2.close()
+
+    println("=== NU1: slice negative idx ===")
+    const sl3: NDArray = sl0.slice([-3], [-1], [1])
+    assertEq("slice neg len", sl3.len(), 2)
+    assertEq("slice neg[0]", sl3.get([0]), 7.0)
+    assertEq("slice neg[1]", sl3.get([1]), 8.0)
+    sl3.close()
+    sl0.close()
+
+    println("=== NU1: take axis=0 ===")
+    const tk0: NDArray = np.from2d([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    const tk1: NDArray = tk0.take(0, [0, 2])
+    assertEq("take rank", tk1.rank(), 2)
+    assertEq("take dim0", tk1.dim(0), 2)
+    assertEq("take dim1", tk1.dim(1), 2)
+    assertEq("take[0,0]", tk1.get([0, 0]), 1.0)
+    assertEq("take[1,1]", tk1.get([1, 1]), 6.0)
+    tk1.close()
+    tk0.close()
+
+    println("=== NU1: copy independence ===")
+    const cp0: NDArray = np.from1d([1.0, 2.0, 3.0])
+    const cp1: NDArray = cp0.copy()
+    cp1.set([0], 99.0)
+    assertEq("cp0[0] unchanged", cp0.get([0]), 1.0)
+    assertEq("cp1[0] mutated", cp1.get([0]), 99.0)
+    cp0.close()
+    cp1.close()
+}
+
+nu1Constructors(np)
+nu1FromData(np)
+nu1Transforms(np)
+nu1Indexing(np)
+
+// ─── NU2: elementwise + broadcasting + reductions ─────────────────
+
+function approxEq(a: float, b: float, tol: float): bool {
+    var d: float = a - b
+    if (d < 0.0) { d = -d }
+    return d <= tol
+}
+
+function nu2Binary(np: NumPy): void {
+    println("=== NU2: binary ops (same shape) ===")
+    const a: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0])
+    const b: NDArray = np.from1d([10.0, 20.0, 30.0, 40.0])
+
+    const s: NDArray = a.add(b)
+    assertEq("add[0]", s.get([0]), 11.0)
+    assertEq("add[3]", s.get([3]), 44.0)
+    s.close()
+
+    const d: NDArray = b.sub(a)
+    assertEq("sub[0]", d.get([0]), 9.0)
+    d.close()
+
+    const m: NDArray = a.mul(b)
+    assertEq("mul[2]", m.get([2]), 90.0)
+    m.close()
+
+    const q: NDArray = b.div(a)
+    assertEq("div[1]", q.get([1]), 10.0)
+    q.close()
+
+    const p: NDArray = a.pow(np.from1d([2.0, 2.0, 2.0, 2.0]))
+    assertEq("pow[3]", p.get([3]), 16.0)
+    p.close()
+
+    const mn: NDArray = a.minimum(b)
+    assertEq("min[0]", mn.get([0]), 1.0)
+    mn.close()
+
+    const mx: NDArray = a.maximum(b)
+    assertEq("max[0]", mx.get([0]), 10.0)
+    mx.close()
+
+    a.close()
+    b.close()
+}
+
+function nu2Broadcast(np: NumPy): void {
+    println("=== NU2: broadcasting ===")
+    // 2x3 + (3,)  → 2x3
+    const M: NDArray = np.from2d([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    const v: NDArray = np.from1d([10.0, 20.0, 30.0])
+    const r: NDArray = M.add(v)
+    assertEq("bcast[0,0]", r.get([0, 0]), 11.0)
+    assertEq("bcast[0,2]", r.get([0, 2]), 33.0)
+    assertEq("bcast[1,1]", r.get([1, 1]), 25.0)
+    r.close()
+
+    // 2x3 + (2,1) → 2x3
+    const col: NDArray = np.fromNd([2, 1], [100.0, 200.0])
+    const r2: NDArray = M.add(col)
+    assertEq("bcast-col[0,0]", r2.get([0, 0]), 101.0)
+    assertEq("bcast-col[1,2]", r2.get([1, 2]), 206.0)
+    r2.close()
+
+    M.close()
+    v.close()
+    col.close()
+}
+
+function nu2Scalar(np: NumPy): void {
+    println("=== NU2: scalar ops ===")
+    const a: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0])
+    const r1: NDArray = a.addScalar(10.0)
+    assertEq("addS[2]", r1.get([2]), 13.0)
+    r1.close()
+
+    const r2: NDArray = a.mulScalar(2.5)
+    assertEq("mulS[3]", r2.get([3]), 10.0)
+    r2.close()
+
+    const r3: NDArray = a.rsubScalar(10.0)   // 10 - a
+    assertEq("rsubS[0]", r3.get([0]), 9.0)
+    assertEq("rsubS[3]", r3.get([3]), 6.0)
+    r3.close()
+    a.close()
+}
+
+function nu2Unary(np: NumPy): void {
+    println("=== NU2: unary ops ===")
+    const a: NDArray = np.from1d([4.0, 9.0, 16.0, 25.0])
+    const s: NDArray = a.sqrt()
+    assertEq("sqrt[1]", s.get([1]), 3.0)
+    assertEq("sqrt[3]", s.get([3]), 5.0)
+    s.close()
+
+    const n: NDArray = a.neg()
+    assertEq("neg[0]", n.get([0]), -4.0)
+    n.close()
+
+    const b: NDArray = np.from1d([-1.5, 2.7, -3.5])
+    const ab: NDArray = b.abs()
+    assertEq("abs[0]", ab.get([0]), 1.5)
+    ab.close()
+    const fl: NDArray = b.floor()
+    assertEq("floor[1]", fl.get([1]), 2.0)
+    fl.close()
+    const ce: NDArray = b.ceil()
+    assertEq("ceil[2]", ce.get([2]), -3.0)
+    ce.close()
+    b.close()
+
+    const z: NDArray = np.from1d([0.0])
+    const e: NDArray = z.exp()
+    assertEq("exp(0)", e.get([0]), 1.0)
+    e.close()
+    z.close()
+
+    a.close()
+}
+
+function nu2Compare(np: NumPy): void {
+    println("=== NU2: comparisons ===")
+    const a: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0])
+    const b: NDArray = np.from1d([1.0, 5.0, 3.0, 2.0])
+    const eq: NDArray = a.eq(b)
+    assertEq("eq[0]", eq.get([0]), 1.0)
+    assertEq("eq[1]", eq.get([1]), 0.0)
+    assertEq("eq[2]", eq.get([2]), 1.0)
+    eq.close()
+
+    const lt: NDArray = a.lt(b)
+    assertEq("lt[1]", lt.get([1]), 1.0)
+    assertEq("lt[3]", lt.get([3]), 0.0)
+    lt.close()
+
+    const gtS: NDArray = a.gtScalar(2.5)
+    assertEq("gtS[2]", gtS.get([2]), 1.0)
+    assertEq("gtS[1]", gtS.get([1]), 0.0)
+    gtS.close()
+
+    a.close()
+    b.close()
+}
+
+function nu2Reductions(np: NumPy): void {
+    println("=== NU2: scalar reductions ===")
+    const a: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0])
+    assertEq("sum", a.sum(), 10.0)
+    assertEq("mean", a.mean(), 2.5)
+    assertEq("min", a.min(), 1.0)
+    assertEq("max", a.max(), 4.0)
+    assertEq("prod", a.prod(), 24.0)
+    assertEq("argmin", a.argmin(), 0)
+    assertEq("argmax", a.argmax(), 3)
+    assert("std~1.118", approxEq(a.std(), 1.11803398, 0.000001))
+    assert("var=1.25", approxEq(a.variance(), 1.25, 0.000000001))
+
+    const mask: NDArray = np.from1d([0.0, 0.0, 1.0])
+    assert("any true", mask.any())
+    assert("all false", mask.all() == false)
+    mask.close()
+
+    a.close()
+
+    println("=== NU2: axis reductions ===")
+    const M: NDArray = np.from2d([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    const sumRow: NDArray = M.sumAxis(1, false)         // sum across cols → shape (2,)
+    assertEq("sumAxis(1) rank", sumRow.rank(), 1)
+    assertEq("sumAxis(1)[0]", sumRow.get([0]), 6.0)
+    assertEq("sumAxis(1)[1]", sumRow.get([1]), 15.0)
+    sumRow.close()
+
+    const sumCol: NDArray = M.sumAxis(0, false)         // sum across rows → shape (3,)
+    assertEq("sumAxis(0)[2]", sumCol.get([2]), 9.0)
+    sumCol.close()
+
+    const sumKeep: NDArray = M.sumAxis(1, true)          // shape (2, 1)
+    assertEq("sumAxis(1,keep) rank", sumKeep.rank(), 2)
+    assertEq("sumAxis(1,keep) dim1", sumKeep.dim(1), 1)
+    assertEq("sumAxis(1,keep)[1,0]", sumKeep.get([1, 0]), 15.0)
+    sumKeep.close()
+
+    const meanCol: NDArray = M.meanAxis(0, false)
+    assertEq("meanAxis(0)[1]", meanCol.get([1]), 3.5)
+    meanCol.close()
+
+    const argmaxRow: NDArray = M.argmaxAxis(1, false)
+    assertEq("argmaxAxis(1)[0]", argmaxRow.get([0]), 2.0)
+    argmaxRow.close()
+
+    M.close()
+}
+
+function nu2InPlace(np: NumPy): void {
+    println("=== NU2: in-place ops ===")
+    const a: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0])
+    a.addInPlaceScalar(10.0)
+    assertEq("ipS add[0]", a.get([0]), 11.0)
+    assertEq("ipS add[3]", a.get([3]), 14.0)
+
+    const b: NDArray = np.from1d([1.0, 1.0, 1.0, 1.0])
+    a.subInPlace(b)
+    assertEq("ip sub[0]", a.get([0]), 10.0)
+    b.close()
+
+    // broadcast in-place: 2x3 *= row(3,)
+    const M: NDArray = np.from2d([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    const row: NDArray = np.from1d([10.0, 100.0, 1000.0])
+    M.mulInPlace(row)
+    assertEq("ip-bcast[0,1]", M.get([0, 1]), 200.0)
+    assertEq("ip-bcast[1,2]", M.get([1, 2]), 6000.0)
+    M.close()
+    row.close()
+
+    a.close()
+}
+
+nu2Binary(np)
+nu2Broadcast(np)
+nu2Scalar(np)
+nu2Unary(np)
+nu2Compare(np)
+nu2Reductions(np)
+nu2InPlace(np)
+
+// ─── Summary ──────────────────────────────────────────────────────
+println("")
+println("──────────────────────────────────────────────")
+println("  passed: " + string(passed))
+println("  failed: " + string(failed))
+println("──────────────────────────────────────────────")
+if (failed > 0) {
+    throw new Error("chuks_numpy: " + string(failed) + " test(s) failed")
+}

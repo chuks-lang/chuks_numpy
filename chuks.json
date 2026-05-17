@@ -1,0 +1,11 @@
+{
+  "name": "chuks_numpy",
+  "version": "0.3.0",
+  "description": "NumPy for Chuks — Rust cdylib shim around ndarray + ndarray-linalg providing n-dimensional float64/int64 arrays, broadcasting, slicing, fancy indexing, elementwise + reduction kernels, BLAS-backed linear algebra (matmul, dot, solve, inv, svd, eig, qr, cholesky), FFT, and ternary ops (where/select/masked-assign) via the typed-FFI PPP_I fast path. Phases NU1–NU5 of the chuks_numpy roadmap.",
+  "entry": "src/index.chuks",
+  "author": "Chuks Team",
+  "license": "MIT",
+  "keywords": ["numpy", "ndarray", "tensor", "blas", "linalg", "ffi"],
+  "repository": "https://github.com/chuks-lang/chuks_numpy",
+  "dependencies": {}
+}

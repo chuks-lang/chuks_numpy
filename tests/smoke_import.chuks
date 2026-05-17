@@ -1,0 +1,2 @@
+import { NumPy, NDArray } from "../src/index.chuks"
+println("import ok")

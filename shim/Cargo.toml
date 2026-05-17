@@ -1,0 +1,22 @@
+[package]
+name = "chuks_numpy_shim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ndarray = { version = "0.16", features = ["rayon"] }
+# BLAS / LAPACK backed linalg. Phase NU3 will enable a backend feature
+# (openblas-static / netlib / accelerate). Kept un-featured for the
+# scaffold so `cargo build` succeeds on bare systems.
+ndarray-linalg = { version = "0.16", default-features = false }
+rayon = "1.10"
+num-traits = "0.2"
+num-complex = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

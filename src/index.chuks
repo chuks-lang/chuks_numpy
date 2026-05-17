@@ -1,0 +1,767 @@
+// chuks_numpy — NumPy-style n-dimensional arrays for Chuks (Phase NU0 scaffold).
+//
+// Builds a thin Rust cdylib shim wrapping the `ndarray` crate on first
+// use via `r.cargoBuild(...)` and exposes a typed NDArray API.
+//
+// Scaffold surface (v0.1):
+//   • NumPy        — top-level loader; exposes `version()`, `zeros(shape)`.
+//   • NDArray      — owned f64 array with `shape()`, `rank()`, `len()`,
+//                    `get(idx)`, `set(idx, v)`, `close()`.
+//
+// Phases NU1–NU5 will add:
+//   • NU1 — construction (ones, full, arange, linspace, from1d/2d), reshape,
+//           strided slicing, fancy indexing.
+//   • NU2 — elementwise (+,-,*,/, sqrt, exp, log, sin, ...), broadcasting,
+//           reductions (sum, mean, std, max, min, argmax, argmin, axis-wise).
+//   • NU3 — BLAS-backed linalg (matmul, dot, solve, inv, det, svd, eig, qr,
+    //           cholesky), plus FFT.
+//   • NU4 — ternary kernels via the typed-FFI PPP_I fast path:
+//           where(cond, x, y), select([conds], [choices]), copyto(dst, src, mask),
+//           masked-assign arr[mask] = other.
+//   • NU5 — IO (npy/npz read/write), random (PRNG), interop with chuks_arrow
+//           (zero-copy NDArray ↔ Arrow primitive array).
+//
+// Usage:
+//   import { NumPy } from "chuks_numpy"
+//
+//   const np = new NumPy("/abs/path/to/chuks_numpy/shim")
+//   println(np.version())
+//
+//   const a = np.zeros([2, 3])
+//   a.set([0, 1], 3.14)
+//   println(string(a.get([0, 1])))   // 3.14
+//   a.close()
+
+import { c, LibHandle, CFunc, CPtr, CSig } from "std/chuksToC"
+import { r } from "std/chuksToRust"
+
+// ── NDArray ─────────────────────────────────────────────────────────
+//
+// Owned f64 array handle. Wraps a Rust `ArrayD<f64>` via Box::into_raw.
+// Always call `close()` exactly once; reuse after close is undefined.
+
+export class NDArray {
+    var _ptr: CPtr
+    var _np: NumPy
+    var _open: bool
+
+    constructor(ptr: CPtr, np: NumPy) {
+        this._ptr = ptr
+        this._np = np
+        this._open = true
+    }
+
+    private __checkOpen(): void {
+        if (this._open == false) {
+            throw new Error("chuks_numpy: NDArray used after close()")
+        }
+    }
+
+    /*
+     Total number of elements (product of shape dims).
+     */
+    public len(): int {
+        this.__checkOpen()
+        return int(this._np._arrayLen(this._ptr))
+    }
+
+    /*
+     Number of dimensions.
+     */
+    public rank(): int {
+        this.__checkOpen()
+        return int(this._np._arrayRank(this._ptr))
+    }
+
+    /*
+     Size of dimension `axis` (0-indexed). Returns -1 if axis is out of range.
+     */
+    public dim(axis: int): int {
+        this.__checkOpen()
+        return int(this._np._arrayDim(this._ptr, axis))
+    }
+
+    /*
+     Shape as an array of dim sizes (length == rank()).
+     */
+    public shape(): []int {
+        this.__checkOpen()
+        const r: int = this.rank()
+        var out: []int = []
+        for (var i: int = 0; i < r; i = i + 1) {
+            out.push(this.dim(i))
+        }
+        return out
+    }
+
+    /*
+     Read the element at `idxs`. Returns 0.0 if `idxs` is out of range or
+     has wrong length. Length of `idxs` must equal rank().
+     */
+    public get(idxs: []int): float {
+        this.__checkOpen()
+        const buf: CPtr = this.__idxBuf(idxs)
+        const v: float = this._np._arrayGet(this._ptr, buf)
+        buf.free()
+        return v
+    }
+
+    /*
+     Write `v` at `idxs`. Returns true on success, false if out-of-range or
+     wrong-length idxs.
+     */
+    public set(idxs: []int, v: float): bool {
+        this.__checkOpen()
+        const buf: CPtr = this.__idxBuf(idxs)
+        const rc: int = this._np._arraySet(this._ptr, buf, v)
+        buf.free()
+        return rc == 0
+    }
+
+    /*
+     Copy the entire array into a flat []float in row-major (C) order.
+     Length of the result equals len(). For multi-dim arrays the elements
+     are laid out as if iterated by the last axis fastest.
+     */
+    public toFloats(): []float {
+        this.__checkOpen()
+        const n: int = this.len()
+        if (n == 0) {
+            const empty: []float = []
+            return empty
+        }
+        const buf: CPtr = c.alloc(n * 8)
+        const wrote: int = int(this._np._arrayToData(this._ptr, buf))
+        const out: []float = c.readDoubleSlice(buf, wrote)
+        buf.free()
+        return out
+    }
+
+    /*
+     Return a new NDArray with the given `shape` and the same elements
+     in row-major order. The product of `shape` must equal len().
+     The source array is unchanged. Throws if the product mismatches.
+     */
+    public reshape(shape: []int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._arrayReshape(this._ptr, shape),
+            "reshape: invalid shape (product must equal len())")
+    }
+
+    /*
+     Return a new NDArray with the axes reversed (NumPy `.T`). For a 2-D
+     array this is the matrix transpose.
+     */
+    public transpose(): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._arrayTranspose(this._ptr),
+            "transpose: failed")
+    }
+
+    /*
+     Return a new NDArray sliced per-axis by `[starts[i] : ends[i] : steps[i])`.
+     `starts/ends/steps` must each have length == rank(). Negative
+     `starts`/`ends` are normalized Python-style. `steps` must be > 0.
+     Throws on shape mismatch or invalid step.
+     */
+    public slice(starts: []int, ends: []int, steps: []int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._arraySlice(this._ptr, starts, ends, steps),
+            "slice: invalid arguments")
+    }
+
+    /*
+     Fancy-index along `axis`: return a new NDArray made of
+     `idxs.length` slices along `axis` selected by each index.
+     Out-of-range indices cause failure.
+     */
+    public take(axis: int, idxs: []int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._arrayTake(this._ptr, axis, idxs),
+            "take: invalid axis or index")
+    }
+
+    /*
+     Return an independent deep copy. Mutations on the copy do not
+     affect the source.
+     */
+    public copy(): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._arrayCopy(this._ptr),
+            "copy: failed")
+    }
+
+    /*
+     Release the Rust-side allocation. Calling close() more than once is a no-op.
+     */
+    public close(): void {
+        if (this._open) {
+            this._np._freeArray(this._ptr)
+            this._open = false
+        }
+    }
+
+    // ── NU2: Elementwise binary ops (broadcasting) ─────────────────
+    // Each op returns a new NDArray; the receiver is unchanged.
+    // For scalar arguments use the `*Scalar` variants below.
+
+    public add(other: NDArray): NDArray { return this.__bin(other, 0) }
+    public sub(other: NDArray): NDArray { return this.__bin(other, 1) }
+    public mul(other: NDArray): NDArray { return this.__bin(other, 2) }
+    public div(other: NDArray): NDArray { return this.__bin(other, 3) }
+    public pow(other: NDArray): NDArray { return this.__bin(other, 4) }
+    public modulo(other: NDArray): NDArray { return this.__bin(other, 5) }
+    public minimum(other: NDArray): NDArray { return this.__bin(other, 6) }
+    public maximum(other: NDArray): NDArray { return this.__bin(other, 7) }
+
+    public addScalar(v: float): NDArray { return this.__binS(v, 0, 0) }
+    public subScalar(v: float): NDArray { return this.__binS(v, 1, 0) }
+    public mulScalar(v: float): NDArray { return this.__binS(v, 2, 0) }
+    public divScalar(v: float): NDArray { return this.__binS(v, 3, 0) }
+    public powScalar(v: float): NDArray { return this.__binS(v, 4, 0) }
+    public modScalar(v: float): NDArray { return this.__binS(v, 5, 0) }
+    public minScalar(v: float): NDArray { return this.__binS(v, 6, 0) }
+    public maxScalar(v: float): NDArray { return this.__binS(v, 7, 0) }
+
+    // Reversed-scalar forms (scalar OP arr), useful for sub/div/pow/mod.
+    public rsubScalar(v: float): NDArray { return this.__binS(v, 1, 1) }
+    public rdivScalar(v: float): NDArray { return this.__binS(v, 3, 1) }
+    public rpowScalar(v: float): NDArray { return this.__binS(v, 4, 1) }
+    public rmodScalar(v: float): NDArray { return this.__binS(v, 5, 1) }
+
+    // ── NU2: Unary elementwise ─────────────────────────────────────
+
+    public sqrt(): NDArray { return this.__un(0) }
+    public exp(): NDArray { return this.__un(1) }
+    public log(): NDArray { return this.__un(2) }
+    public sin(): NDArray { return this.__un(3) }
+    public cos(): NDArray { return this.__un(4) }
+    public tan(): NDArray { return this.__un(5) }
+    public abs(): NDArray { return this.__un(6) }
+    public floor(): NDArray { return this.__un(7) }
+    public ceil(): NDArray { return this.__un(8) }
+    public round(): NDArray { return this.__un(9) }
+    public neg(): NDArray { return this.__un(10) }
+
+    // ── NU2: Comparisons (return a 0.0/1.0 NDArray mask) ───────────
+
+    public eq(other: NDArray): NDArray { return this.__cmp(other, 0) }
+    public ne(other: NDArray): NDArray { return this.__cmp(other, 1) }
+    public lt(other: NDArray): NDArray { return this.__cmp(other, 2) }
+    public le(other: NDArray): NDArray { return this.__cmp(other, 3) }
+    public gt(other: NDArray): NDArray { return this.__cmp(other, 4) }
+    public ge(other: NDArray): NDArray { return this.__cmp(other, 5) }
+
+    public eqScalar(v: float): NDArray { return this.__cmpS(v, 0, 0) }
+    public neScalar(v: float): NDArray { return this.__cmpS(v, 1, 0) }
+    public ltScalar(v: float): NDArray { return this.__cmpS(v, 2, 0) }
+    public leScalar(v: float): NDArray { return this.__cmpS(v, 3, 0) }
+    public gtScalar(v: float): NDArray { return this.__cmpS(v, 4, 0) }
+    public geScalar(v: float): NDArray { return this.__cmpS(v, 5, 0) }
+
+    // ── NU2: Reductions ────────────────────────────────────────────
+    // All-axes reductions return a float; per-axis reductions return an
+    // NDArray. `keepdims` preserves the reduced axis as size 1.
+
+    public sum(): float { return this.__red(0) }
+    public mean(): float { return this.__red(1) }
+    public min(): float { return this.__red(2) }
+    public max(): float { return this.__red(3) }
+    public prod(): float { return this.__red(4) }
+    public std(): float { return this.__red(5) }
+    public variance(): float { return this.__red(6) }
+    public any(): bool { return this.__red(7) != 0.0 }
+    public all(): bool { return this.__red(8) != 0.0 }
+    public argmin(): int { return int(this.__red(9)) }
+    public argmax(): int { return int(this.__red(10)) }
+
+    public sumAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 0) }
+    public meanAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 1) }
+    public minAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 2) }
+    public maxAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 3) }
+    public prodAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 4) }
+    public stdAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 5) }
+    public varAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 6) }
+    public anyAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 7) }
+    public allAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 8) }
+    public argminAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 9) }
+    public argmaxAxis(axis: int, keepdims: bool): NDArray { return this.__redAx(axis, keepdims, 10) }
+
+    // ── NU2: In-place binary ops (mutate this) ─────────────────────
+    // `other` must broadcast to this.shape(). Returns this (for chaining).
+
+    public addInPlace(other: NDArray): NDArray { return this.__binIp(other, 0) }
+    public subInPlace(other: NDArray): NDArray { return this.__binIp(other, 1) }
+    public mulInPlace(other: NDArray): NDArray { return this.__binIp(other, 2) }
+    public divInPlace(other: NDArray): NDArray { return this.__binIp(other, 3) }
+
+    public addInPlaceScalar(v: float): NDArray { return this.__binIpS(v, 0) }
+    public subInPlaceScalar(v: float): NDArray { return this.__binIpS(v, 1) }
+    public mulInPlaceScalar(v: float): NDArray { return this.__binIpS(v, 2) }
+    public divInPlaceScalar(v: float): NDArray { return this.__binIpS(v, 3) }
+
+    // ── NU2 internals ──────────────────────────────────────────────
+
+    private __bin(other: NDArray, op: int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._binop(this._ptr, other._ptr, op),
+            "binary op failed (incompatible shapes?)")
+    }
+
+    private __binS(v: float, op: int, rev: int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._binopScalar(this._ptr, v, op, rev),
+            "scalar binary op failed")
+    }
+
+    private __un(op: int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._unary(this._ptr, op),
+            "unary op failed")
+    }
+
+    private __cmp(other: NDArray, op: int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._cmp(this._ptr, other._ptr, op),
+            "compare failed (incompatible shapes?)")
+    }
+
+    private __cmpS(v: float, op: int, rev: int): NDArray {
+        this.__checkOpen()
+        return this._np.__wrapNew(
+            this._np._cmpScalar(this._ptr, v, op, rev),
+            "scalar compare failed")
+    }
+
+    private __red(op: int): float {
+        this.__checkOpen()
+        return this._np._reduceAll(this._ptr, op)
+    }
+
+    private __redAx(axis: int, keepdims: bool, op: int): NDArray {
+        this.__checkOpen()
+        var k: int = 0
+        if (keepdims) { k = 1 }
+        return this._np.__wrapNew(
+            this._np._reduceAxis(this._ptr, axis, k, op),
+            "reduce-axis failed (invalid axis?)")
+    }
+
+    private __binIp(other: NDArray, op: int): NDArray {
+        this.__checkOpen()
+        const rc: int = this._np._binopInplace(this._ptr, other._ptr, op)
+        if (rc != 0) {
+            throw new Error("chuks_numpy: in-place binary op failed (shapes not broadcast-compatible)")
+        }
+        return this
+    }
+
+    private __binIpS(v: float, op: int): NDArray {
+        this.__checkOpen()
+        this._np._binopInplaceScalar(this._ptr, v, op)
+        return this
+    }
+
+    private __idxBuf(idxs: []int): CPtr {
+        const n: int = idxs.length
+        var alloc: int = n * 8
+        if (alloc == 0) { alloc = 1 }
+        const buf: CPtr = c.alloc(alloc)
+        if (n > 0) {
+            c.writeInt64Slice(buf, idxs)
+        }
+        return buf
+    }
+}
+
+// ── NumPy ───────────────────────────────────────────────────────────
+//
+// Top-level loader. Holds the loaded shim library and cached CFunc
+// handles. One instance per process is recommended.
+
+export class NumPy {
+    var _lib: LibHandle
+
+    // Strings
+    var _version_fn: CFunc
+    var _free_string: CFunc
+
+    // NDArray (f64)
+    var _array_zeros_f64: CFunc
+    var _array_len: CFunc
+    var _array_rank: CFunc
+    var _array_dim: CFunc
+    var _array_get_f64: CFunc
+    var _array_set_f64: CFunc
+    var _free_array_f64: CFunc
+
+    // NU1 constructors / transforms
+    var _array_ones_f64: CFunc
+    var _array_full_f64: CFunc
+    var _array_arange_f64: CFunc
+    var _array_linspace_f64: CFunc
+    var _array_eye_f64: CFunc
+    var _array_from_data_f64: CFunc
+    var _array_to_data_f64: CFunc
+    var _array_reshape_f64: CFunc
+    var _array_transpose_f64: CFunc
+    var _array_slice_f64: CFunc
+    var _array_take_f64: CFunc
+    var _array_copy_f64: CFunc
+
+    // NU2 elementwise / broadcasting / reductions
+    var _binop_f64: CFunc
+    var _binop_scalar_f64: CFunc
+    var _unary_f64: CFunc
+    var _cmp_f64: CFunc
+    var _cmp_scalar_f64: CFunc
+    var _reduce_all_f64: CFunc
+    var _reduce_axis_f64: CFunc
+    var _binop_inplace_f64: CFunc
+    var _binop_inplace_scalar_f64: CFunc
+
+    /*
+     Build (or reuse cached) the shim cdylib at `shimManifestDir` and
+     load it. `shimManifestDir` is the directory containing Cargo.toml.
+     */
+    constructor(shimManifestDir: string) {
+        const libPath: string = r.cargoBuild(shimManifestDir, true)
+        this._lib = c.load(libPath)
+        const L: LibHandle = this._lib
+
+        // Strings
+        this._version_fn = L.symbol("np_version", new CSig([], CSig.T_PTR))
+        this._free_string = L.symbol("np_free_string", new CSig([CSig.T_PTR], CSig.T_VOID))
+
+        // NDArray
+        this._array_zeros_f64 = L.symbol("np_array_zeros_f64",
+            new CSig([CSig.T_INT64, CSig.T_PTR], CSig.T_PTR))
+        this._array_len = L.symbol("np_array_len",
+            new CSig([CSig.T_PTR], CSig.T_INT64))
+        this._array_rank = L.symbol("np_array_rank",
+            new CSig([CSig.T_PTR], CSig.T_INT64))
+        this._array_dim = L.symbol("np_array_dim",
+            new CSig([CSig.T_PTR, CSig.T_INT64], CSig.T_INT64))
+        this._array_get_f64 = L.symbol("np_array_get_f64",
+            new CSig([CSig.T_PTR, CSig.T_PTR], CSig.T_DOUBLE))
+        this._array_set_f64 = L.symbol("np_array_set_f64",
+            new CSig([CSig.T_PTR, CSig.T_PTR, CSig.T_DOUBLE], CSig.T_INT))
+        this._free_array_f64 = L.symbol("np_free_array_f64",
+            new CSig([CSig.T_PTR], CSig.T_VOID))
+
+        // NU1
+        this._array_ones_f64 = L.symbol("np_array_ones_f64",
+            new CSig([CSig.T_INT64, CSig.T_PTR], CSig.T_PTR))
+        this._array_full_f64 = L.symbol("np_array_full_f64",
+            new CSig([CSig.T_INT64, CSig.T_PTR, CSig.T_DOUBLE], CSig.T_PTR))
+        this._array_arange_f64 = L.symbol("np_array_arange_f64",
+            new CSig([CSig.T_DOUBLE, CSig.T_DOUBLE, CSig.T_DOUBLE], CSig.T_PTR))
+        this._array_linspace_f64 = L.symbol("np_array_linspace_f64",
+            new CSig([CSig.T_DOUBLE, CSig.T_DOUBLE, CSig.T_INT64], CSig.T_PTR))
+        this._array_eye_f64 = L.symbol("np_array_eye_f64",
+            new CSig([CSig.T_INT64], CSig.T_PTR))
+        this._array_from_data_f64 = L.symbol("np_array_from_data_f64",
+            new CSig([CSig.T_INT64, CSig.T_PTR, CSig.T_PTR], CSig.T_PTR))
+        this._array_to_data_f64 = L.symbol("np_array_to_data_f64",
+            new CSig([CSig.T_PTR, CSig.T_PTR], CSig.T_INT64))
+        this._array_reshape_f64 = L.symbol("np_array_reshape_f64",
+            new CSig([CSig.T_PTR, CSig.T_INT64, CSig.T_PTR], CSig.T_PTR))
+        this._array_transpose_f64 = L.symbol("np_array_transpose_f64",
+            new CSig([CSig.T_PTR], CSig.T_PTR))
+        this._array_slice_f64 = L.symbol("np_array_slice_f64",
+            new CSig([CSig.T_PTR, CSig.T_INT64, CSig.T_PTR, CSig.T_PTR, CSig.T_PTR], CSig.T_PTR))
+        this._array_take_f64 = L.symbol("np_array_take_f64",
+            new CSig([CSig.T_PTR, CSig.T_INT64, CSig.T_INT64, CSig.T_PTR], CSig.T_PTR))
+        this._array_copy_f64 = L.symbol("np_array_copy_f64",
+            new CSig([CSig.T_PTR], CSig.T_PTR))
+
+        // NU2
+        this._binop_f64 = L.symbol("np_binop_f64",
+            new CSig([CSig.T_PTR, CSig.T_PTR, CSig.T_INT], CSig.T_PTR))
+        this._binop_scalar_f64 = L.symbol("np_binop_scalar_f64",
+            new CSig([CSig.T_PTR, CSig.T_DOUBLE, CSig.T_INT, CSig.T_INT], CSig.T_PTR))
+        this._unary_f64 = L.symbol("np_unary_f64",
+            new CSig([CSig.T_PTR, CSig.T_INT], CSig.T_PTR))
+        this._cmp_f64 = L.symbol("np_cmp_f64",
+            new CSig([CSig.T_PTR, CSig.T_PTR, CSig.T_INT], CSig.T_PTR))
+        this._cmp_scalar_f64 = L.symbol("np_cmp_scalar_f64",
+            new CSig([CSig.T_PTR, CSig.T_DOUBLE, CSig.T_INT, CSig.T_INT], CSig.T_PTR))
+        this._reduce_all_f64 = L.symbol("np_reduce_all_f64",
+            new CSig([CSig.T_PTR, CSig.T_INT], CSig.T_DOUBLE))
+        this._reduce_axis_f64 = L.symbol("np_reduce_axis_f64",
+            new CSig([CSig.T_PTR, CSig.T_INT64, CSig.T_INT, CSig.T_INT], CSig.T_PTR))
+        this._binop_inplace_f64 = L.symbol("np_binop_inplace_f64",
+            new CSig([CSig.T_PTR, CSig.T_PTR, CSig.T_INT], CSig.T_INT))
+        this._binop_inplace_scalar_f64 = L.symbol("np_binop_inplace_scalar_f64",
+            new CSig([CSig.T_PTR, CSig.T_DOUBLE, CSig.T_INT], CSig.T_INT))
+    }
+
+    /*
+     Returns the shim's version string
+     (e.g. "chuks_numpy_shim 0.1.0 (ndarray 0.16)").
+     */
+    public version(): string {
+        return this.__readAndFreeStr(this._version_fn.call([]))
+    }
+
+    /*
+     Allocate an all-zeros f64 NDArray with the given `shape`. Each entry
+     of `shape` must be >= 0. Total size = product of shape dims.
+     */
+    public zeros(shape: []int): NDArray {
+        const n: int = shape.length
+        var alloc: int = n * 8
+        if (alloc == 0) { alloc = 1 }
+        const buf: CPtr = c.alloc(alloc)
+        if (n > 0) {
+            c.writeInt64Slice(buf, shape)
+        }
+        const h: any = this._array_zeros_f64.call([n, buf.handle()])
+        buf.free()
+        const ptr: CPtr = new CPtr(h, false, -1)
+        if (ptr.isNull()) {
+            throw new Error("chuks_numpy: zeros() allocation failed")
+        }
+        return new NDArray(ptr, this)
+    }
+
+    /*
+     Allocate an all-ones f64 NDArray with the given `shape`.
+     */
+    public ones(shape: []int): NDArray {
+        const buf: CPtr = this.__shapeBuf(shape)
+        const h: any = this._array_ones_f64.call([shape.length, buf.handle()])
+        buf.free()
+        return this.__wrapNew(h, "ones: allocation failed")
+    }
+
+    /*
+     Allocate an f64 NDArray with the given `shape` filled with `value`.
+     */
+    public full(shape: []int, value: float): NDArray {
+        const buf: CPtr = this.__shapeBuf(shape)
+        const h: any = this._array_full_f64.call([shape.length, buf.handle(), value])
+        buf.free()
+        return this.__wrapNew(h, "full: allocation failed")
+    }
+
+    /*
+     Build a 1-D NDArray containing values `[start, start+step, ...)` up to
+     (but not including) `stop`. `step` must be non-zero and finite. If
+     `start == stop` or the sign disagrees with `step`, returns an empty
+     array of length 0.
+     */
+    public arange(start: float, stop: float, step: float): NDArray {
+        const h: any = this._array_arange_f64.call([start, stop, step])
+        return this.__wrapNew(h, "arange: invalid arguments")
+    }
+
+    /*
+     Build a 1-D NDArray of `n` evenly spaced values from `start` to `stop`
+     inclusive. n == 0 returns an empty array; n == 1 returns `[start]`.
+     */
+    public linspace(start: float, stop: float, n: int): NDArray {
+        const h: any = this._array_linspace_f64.call([start, stop, n])
+        return this.__wrapNew(h, "linspace: allocation failed")
+    }
+
+    /*
+     Build the n×n identity matrix as an f64 NDArray.
+     */
+    public eye(n: int): NDArray {
+        const h: any = this._array_eye_f64.call([n])
+        return this.__wrapNew(h, "eye: allocation failed")
+    }
+
+    /*
+     Build an NDArray from a flat row-major []float and an explicit `shape`.
+     The product of `shape` must equal `values.length`.
+     */
+    public fromNd(shape: []int, values: []float): NDArray {
+        var total: int = 1
+        for (var i: int = 0; i < shape.length; i = i + 1) { total = total * shape[i] }
+        if (total != values.length) {
+            throw new Error("chuks_numpy: fromNd: shape product " + string(total) +
+                " != values.length " + string(values.length))
+        }
+        const sbuf: CPtr = this.__shapeBuf(shape)
+        var dalloc: int = values.length * 8
+        if (dalloc == 0) { dalloc = 1 }
+        const dbuf: CPtr = c.alloc(dalloc)
+        if (values.length > 0) {
+            c.writeDoubleSlice(dbuf, values)
+        }
+        const h: any = this._array_from_data_f64.call([shape.length, sbuf.handle(), dbuf.handle()])
+        sbuf.free()
+        dbuf.free()
+        return this.__wrapNew(h, "fromNd: allocation failed")
+    }
+
+    /*
+     Convenience: build a 1-D NDArray from a flat []float.
+     */
+    public from1d(values: []float): NDArray {
+        return this.fromNd([values.length], values)
+    }
+
+    /*
+     Convenience: build a 2-D NDArray from a []*[]float of rows. All rows
+     must have the same length. Throws on ragged input.
+     */
+    public from2d(rows: [][]float): NDArray {
+        const nr: int = rows.length
+        if (nr == 0) {
+            const emptyShape: []int = [0, 0]
+            const emptyFlat: []float = []
+            return this.fromNd(emptyShape, emptyFlat)
+        }
+        const nc: int = rows[0].length
+        var flat: []float = []
+        for (var i: int = 0; i < nr; i = i + 1) {
+            const row: []float = rows[i]
+            if (row.length != nc) {
+                throw new Error("chuks_numpy: from2d: ragged rows (row " +
+                        string(i) + " has length " + string(row.length) +
+                        ", expected " + string(nc) + ")")
+            }
+            for (var j: int = 0; j < nc; j = j + 1) {
+                flat.push(row[j])
+            }
+        }
+        return this.fromNd([nr, nc], flat)
+    }
+
+    // ── internal accessors used by NDArray ─────────────────────────
+
+    public _arrayLen(p: CPtr): int { return int(this._array_len.call([p.handle()])) }
+    public _arrayRank(p: CPtr): int { return int(this._array_rank.call([p.handle()])) }
+    public _arrayDim(p: CPtr, axis: int): int {
+        return int(this._array_dim.call([p.handle(), axis]))
+    }
+    public _arrayGet(p: CPtr, idxBuf: CPtr): float {
+        return float(this._array_get_f64.call([p.handle(), idxBuf.handle()]))
+    }
+    public _arraySet(p: CPtr, idxBuf: CPtr, v: float): int {
+        return int(this._array_set_f64.call([p.handle(), idxBuf.handle(), v]))
+    }
+    public _freeArray(p: CPtr): void {
+        this._free_array_f64.call([p.handle()])
+    }
+
+    public _arrayToData(p: CPtr, out: CPtr): int {
+        return int(this._array_to_data_f64.call([p.handle(), out.handle()]))
+    }
+
+    public _arrayReshape(p: CPtr, shape: []int): any {
+        const buf: CPtr = this.__shapeBuf(shape)
+        const h: any = this._array_reshape_f64.call([p.handle(), shape.length, buf.handle()])
+        buf.free()
+        return h
+    }
+
+    public _arrayTranspose(p: CPtr): any {
+        return this._array_transpose_f64.call([p.handle()])
+    }
+
+    public _arraySlice(p: CPtr, starts: []int, ends: []int, steps: []int): any {
+        if (starts.length != ends.length || starts.length != steps.length) {
+            throw new Error("chuks_numpy: slice: starts/ends/steps must have the same length")
+        }
+        const rank: int = starts.length
+        const sb: CPtr = this.__shapeBuf(starts)
+        const eb: CPtr = this.__shapeBuf(ends)
+        const tb: CPtr = this.__shapeBuf(steps)
+        const h: any = this._array_slice_f64.call([p.handle(), rank, sb.handle(), eb.handle(), tb.handle()])
+        sb.free()
+        eb.free()
+        tb.free()
+        return h
+    }
+
+    public _arrayTake(p: CPtr, axis: int, idxs: []int): any {
+        const buf: CPtr = this.__shapeBuf(idxs)
+        const h: any = this._array_take_f64.call([p.handle(), axis, idxs.length, buf.handle()])
+        buf.free()
+        return h
+    }
+
+    public _arrayCopy(p: CPtr): any {
+        return this._array_copy_f64.call([p.handle()])
+    }
+
+    // ── NU2 dispatch helpers ───────────────────────────────────────
+
+    public _binop(a: CPtr, b: CPtr, op: int): any {
+        return this._binop_f64.call([a.handle(), b.handle(), op])
+    }
+
+    public _binopScalar(a: CPtr, v: float, op: int, rev: int): any {
+        return this._binop_scalar_f64.call([a.handle(), v, op, rev])
+    }
+
+    public _unary(a: CPtr, op: int): any {
+        return this._unary_f64.call([a.handle(), op])
+    }
+
+    public _cmp(a: CPtr, b: CPtr, op: int): any {
+        return this._cmp_f64.call([a.handle(), b.handle(), op])
+    }
+
+    public _cmpScalar(a: CPtr, v: float, op: int, rev: int): any {
+        return this._cmp_scalar_f64.call([a.handle(), v, op, rev])
+    }
+
+    public _reduceAll(a: CPtr, op: int): float {
+        return float(this._reduce_all_f64.call([a.handle(), op]))
+    }
+
+    public _reduceAxis(a: CPtr, axis: int, keepdims: int, op: int): any {
+        return this._reduce_axis_f64.call([a.handle(), axis, keepdims, op])
+    }
+
+    public _binopInplace(dst: CPtr, src: CPtr, op: int): int {
+        return int(this._binop_inplace_f64.call([dst.handle(), src.handle(), op]))
+    }
+
+    public _binopInplaceScalar(dst: CPtr, v: float, op: int): int {
+        return int(this._binop_inplace_scalar_f64.call([dst.handle(), v, op]))
+    }
+
+    public __wrapNew(h: any, errMsg: string): NDArray {
+        const ptr: CPtr = new CPtr(h, false, -1)
+        if (ptr.isNull()) {
+            throw new Error("chuks_numpy: " + errMsg)
+        }
+        return new NDArray(ptr, this)
+    }
+
+    private __shapeBuf(values: []int): CPtr {
+        const n: int = values.length
+        var alloc: int = n * 8
+        if (alloc == 0) { alloc = 1 }
+        const buf: CPtr = c.alloc(alloc)
+        if (n > 0) {
+            c.writeInt64Slice(buf, values)
+        }
+        return buf
+    }
+
+    private __readAndFreeStr(sptr: any): string {
+        const wrap: CPtr = new CPtr(sptr, false, -1)
+        if (wrap.isNull()) {
+            return ""
+        }
+        const out: string = c.string(wrap)
+        this._free_string.call([sptr])
+        return out
+    }
+}
