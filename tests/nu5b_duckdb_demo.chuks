@@ -1,0 +1,163 @@
+// NU5b end-to-end demo:
+//
+//     .npz file  →  chuks_numpy NDArray
+//                →  chuks_arrow Float64Array  (zero-copy via Arrow CDI)
+//                →  chuks_duckdb table        (Appender)
+//                →  SQL aggregate query
+//
+// Demonstrates that data produced by NumPy-style numerics can be moved
+// across three independent Rust shims without an intermediate buffer
+// copy at the NumPy ↔ Arrow boundary. (The DuckDB ingest leg still
+    // goes row-at-a-time through the Appender — a future enhancement
+    // would be a bulk `Connection.appendArrow(table, recordBatch)` API.)
+//
+// VM-only: relative cross-package imports aren't supported by the AOT
+// module resolver. Run with:
+//
+//     cd /Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy
+//     chuks run tests/nu5b_duckdb_demo.chuks
+
+import { NumPy, NDArray, NpzWriter } from "../src/index.chuks"
+import { Arrow, Array as ArrowArrayObj } from "../../chuks_arrow/src/index.chuks"
+import { DuckDB } from "../../chuks_duckdb/src/index.chuks"
+import { ArrowSchema, ArrowArray } from "std/chuksArrow"
+
+const NUMPY_SHIM:  string = "/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy/shim"
+const ARROW_SHIM:  string = "/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_arrow/shim"
+const DUCKDB_SHIM: string = "/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_duckdb/shim"
+const NPZ_PATH:    string = "/tmp/chuks_nu5b_demo.npz"
+
+var passed: int = 0
+var failed: int = 0
+
+function assert(label: string, condition: bool): void {
+    if (condition) {
+        println("  PASS: " + label)
+        passed = passed + 1
+    } else {
+        println("  FAIL: " + label)
+        failed = failed + 1
+    }
+}
+
+function assertEq(label: string, actual: any, expected: any): void {
+    if (string(actual) == string(expected)) {
+        println("  PASS: " + label)
+        passed = passed + 1
+    } else {
+        println("  FAIL: " + label + " — expected " + string(expected) + ", got " + string(actual))
+        failed = failed + 1
+    }
+}
+
+function approxEq(a: float, b: float, eps: float): bool {
+    var d: float = a - b
+    if (d < 0.0) { d = -d }
+    return d < eps
+}
+
+println("=== NU5b demo: .npz → NDArray → Arrow → DuckDB ===")
+
+const np: NumPy  = new NumPy(NUMPY_SHIM)
+const ar: Arrow  = new Arrow(ARROW_SHIM)
+const dd: DuckDB = new DuckDB(DUCKDB_SHIM)
+
+// ── Step 1 ── Produce an .npz file from NumPy. -----------------------
+//
+// Two synthetic columns: a thousand uniform samples per column.
+np.seed(0xC0FFEE)
+const xs: NDArray = np.uniform(0.0, 100.0, [1000])
+const ys: NDArray = np.uniform(0.0,   1.0, [1000])
+const writer: NpzWriter = np.npzWrite(NPZ_PATH)
+writer.add("xs", xs)
+writer.add("ys", ys)
+writer.close()
+xs.close(); ys.close()
+println("  wrote " + NPZ_PATH)
+
+// ── Step 2 ── Read it back into NDArrays. ----------------------------
+const reader = np.npzRead(NPZ_PATH)
+const xsLoaded: NDArray = reader.get("xs")
+const ysLoaded: NDArray = reader.get("ys")
+reader.close()
+const n: int = int(xsLoaded.size())
+assertEq("npz round-trip count", n, 1000)
+
+// Aggregates we'll compare against DuckDB.
+const npSumXs: float = xsLoaded.sum()
+const npSumYs: float = ysLoaded.sum()
+const npMaxXs: float = xsLoaded.max()
+const npMinYs: float = ysLoaded.min()
+
+// ── Step 3 ── NDArray → Arrow Float64Array  (zero copy, NU5b). -------
+const schX: ArrowSchema = ArrowSchema.alloc()
+const arrX: ArrowArray  = ArrowArray.alloc()
+np.exportArrowCDI(xsLoaded, schX.ptr(), arrX.ptr())
+const colX: ArrowArrayObj = ar.importArray(schX, arrX)
+schX.free(); arrX.free()
+
+const schY: ArrowSchema = ArrowSchema.alloc()
+const arrY: ArrowArray  = ArrowArray.alloc()
+np.exportArrowCDI(ysLoaded, schY.ptr(), arrY.ptr())
+const colY: ArrowArrayObj = ar.importArray(schY, arrY)
+schY.free(); arrY.free()
+
+assertEq("arrow X len = 1000", colX.len(), 1000)
+assertEq("arrow Y len = 1000", colY.len(), 1000)
+// nd.close() is a no-op after exportArrowCDI consumes it.
+xsLoaded.close(); ysLoaded.close()
+
+// ── Step 4 ── Stream the Arrow arrays into a DuckDB table. ----------
+const db   = dd.openMemory()
+const conn = db.connect()
+conn.execute("CREATE TABLE samples (x DOUBLE, y DOUBLE)")
+const app = conn.appender("samples")
+var i: int = 0
+while (i < n) {
+    app.beginRow()
+    .appendDouble(colX.getFloat(i))
+    .appendDouble(colY.getFloat(i))
+    .endRow()
+    i = i + 1
+}
+app.flush()
+app.close()
+colX.close(); colY.close()
+
+// ── Step 5 ── SQL aggregates and cross-check vs NumPy. ---------------
+const r = conn.query("SELECT COUNT(*), SUM(x), SUM(y), MAX(x), MIN(y) FROM samples")
+assertEq("rows = 1", r.numRows(), 1)
+const ddCount: int   = r.getInt(0, 0)
+const ddSumX:  float = r.getFloat(0, 1)
+const ddSumY:  float = r.getFloat(0, 2)
+const ddMaxX:  float = r.getFloat(0, 3)
+const ddMinY:  float = r.getFloat(0, 4)
+r.close()
+
+assertEq("DuckDB COUNT(*) = 1000", ddCount, 1000)
+assert("DuckDB SUM(x) matches NumPy", approxEq(ddSumX, npSumXs, 0.000001))
+assert("DuckDB SUM(y) matches NumPy", approxEq(ddSumY, npSumYs, 0.000001))
+assert("DuckDB MAX(x) matches NumPy", approxEq(ddMaxX, npMaxXs, 0.000001))
+assert("DuckDB MIN(y) matches NumPy", approxEq(ddMinY, npMinYs, 0.000001))
+
+println("  numpy SUM(x) = " + string(npSumXs) + "   duckdb SUM(x) = " + string(ddSumX))
+println("  numpy MAX(x) = " + string(npMaxXs) + "   duckdb MAX(x) = " + string(ddMaxX))
+
+// One more SQL query exercising the data — bucket the y values.
+const r2 = conn.query("SELECT COUNT(*) FROM samples WHERE y < 0.5")
+const lowY: int = r2.getInt(0, 0)
+r2.close()
+assert("DuckDB y<0.5 bucket non-empty", lowY > 0)
+assert("DuckDB y<0.5 bucket < total",   lowY < n)
+
+conn.close()
+db.close()
+
+println("")
+println("──────────────────────────────────────────────")
+println("  passed: " + string(passed))
+println("  failed: " + string(failed))
+println("──────────────────────────────────────────────")
+if (failed > 0) {
+    throw new Error("nu5b_duckdb_demo: " + string(failed) + " test(s) failed")
+}

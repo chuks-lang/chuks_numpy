@@ -1,0 +1,109 @@
+// NU5b: chuks_numpy → chuks_arrow zero-copy CDI round-trip.
+//
+// VM-only. AOT module resolution does not support relative imports
+// crossing package boundaries (`../../chuks_arrow/...`), so this
+// integration test lives outside the main `tests/index.test.chuks`
+// and is exercised in VM mode only.
+//
+// Run:
+//   cd /Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy
+//   chuks run tests/nu5b_arrow_cdi.test.chuks
+
+import { NumPy, NDArray } from "../src/index.chuks"
+import { Arrow, Array as ArrowArrayObj } from "../../chuks_arrow/src/index.chuks"
+import { ArrowSchema, ArrowArray } from "std/chuksArrow"
+
+const NUMPY_SHIM: string = "/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy/shim"
+const ARROW_SHIM: string = "/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_arrow/shim"
+
+var passed: int = 0
+var failed: int = 0
+
+function assert(label: string, condition: bool): void {
+    if (condition) {
+        println("  PASS: " + label)
+        passed = passed + 1
+    } else {
+        println("  FAIL: " + label)
+        failed = failed + 1
+    }
+}
+
+function assertEq(label: string, actual: any, expected: any): void {
+    if (string(actual) == string(expected)) {
+        println("  PASS: " + label)
+        passed = passed + 1
+    } else {
+        println("  FAIL: " + label + " — expected " + string(expected) + ", got " + string(actual))
+        failed = failed + 1
+    }
+}
+
+function approxEq(a: float, b: float, eps: float): bool {
+    var d: float = a - b
+    if (d < 0.0) { d = -d }
+    return d < eps
+}
+
+const np: NumPy = new NumPy(NUMPY_SHIM)
+const ar: Arrow = new Arrow(ARROW_SHIM)
+
+println("=== NU5b: Arrow CDI round-trip (chuks_numpy → chuks_arrow) ===")
+
+// 1-D f64 NDArray → Arrow Float64Array, verifying length, element-wise
+// equality, and aggregate sum.
+const src: []float = [10.0, 20.0, 30.0, 40.0, 50.0]
+const nd: NDArray = np.from1d(src)
+const expectedSum: float = nd.sum()
+const expectedLen: int = int(nd.size())
+
+const sch: ArrowSchema = ArrowSchema.alloc()
+const arrFFI: ArrowArray = ArrowArray.alloc()
+np.exportArrowCDI(nd, sch.ptr(), arrFFI.ptr())
+assert("NDArray consumed (closed)", nd._open == false)
+
+const imported: ArrowArrayObj = ar.importArray(sch, arrFFI)
+sch.free(); arrFFI.free()
+
+assertEq("imported length matches", imported.len(), expectedLen)
+assertEq("imported[0]", imported.getFloat(0), 10.0)
+assertEq("imported[2]", imported.getFloat(2), 30.0)
+assertEq("imported[4]", imported.getFloat(4), 50.0)
+
+var sum: float = 0.0
+var i: int = 0
+while (i < expectedLen) {
+    sum = sum + imported.getFloat(i)
+    i = i + 1
+}
+assert("imported sum matches NDArray sum", approxEq(sum, expectedSum, 0.000000000001))
+
+imported.close()
+nd.close()  // no-op (already consumed)
+
+// Slice-then-copy path: views aren't contiguous; .copy() makes them so.
+const big: NDArray = np.from1d([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+const view: NDArray = big.slice([1], [5], [1])  // [2,3,4,5]
+const contig: NDArray = view.copy()
+view.close(); big.close()
+
+const sch2: ArrowSchema = ArrowSchema.alloc()
+const arr2: ArrowArray = ArrowArray.alloc()
+np.exportArrowCDI(contig, sch2.ptr(), arr2.ptr())
+const imp2: ArrowArrayObj = ar.importArray(sch2, arr2)
+sch2.free(); arr2.free()
+
+assertEq("sliced.len() = 4", imp2.len(), 4)
+assertEq("sliced[0] = 2", imp2.getFloat(0), 2.0)
+assertEq("sliced[3] = 5", imp2.getFloat(3), 5.0)
+imp2.close()
+contig.close()
+
+println("")
+println("──────────────────────────────────────────────")
+println("  passed: " + string(passed))
+println("  failed: " + string(failed))
+println("──────────────────────────────────────────────")
+if (failed > 0) {
+    throw new Error("nu5b_arrow_cdi: " + string(failed) + " test(s) failed")
+}

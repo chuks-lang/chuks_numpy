@@ -1,6 +1,6 @@
 [package]
 name = "chuks_numpy_shim"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [lib]
@@ -8,13 +8,28 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ndarray = { version = "0.16", features = ["rayon"] }
-# BLAS / LAPACK backed linalg. Phase NU3 will enable a backend feature
-# (openblas-static / netlib / accelerate). Kept un-featured for the
-# scaffold so `cargo build` succeeds on bare systems.
-ndarray-linalg = { version = "0.16", default-features = false }
+# NU3 linalg: pure-Rust `nalgebra`. Cross-platform, no system BLAS/LAPACK
+# plumbing. Performance is within 2-5× of Accelerate/OpenBLAS on M-series
+# for matmul/inv at sizes ≤ 1k; acceptable for 0.4.0. Can be swapped for
+# `ndarray-linalg` later if benches demand it.
+nalgebra = "0.33"
+# NU3 FFT: pure-Rust `rustfft`. Mature, near-FFTW perf via auto-vectorization.
+rustfft = "6"
 rayon = "1.10"
 num-traits = "0.2"
 num-complex = "0.4"
+# NU5 random: rand 0.8 + rand_distr 0.4 — uniform, normal, binomial,
+# poisson, gamma, beta, choice, shuffle. Seedable via `np_random_seed`.
+rand = "0.8"
+rand_distr = "0.4"
+# NU5 IO: `.npz` is a ZIP archive of `.npy` files. We use the stored (no
+# compression) variant by default. `default-features = false` drops the
+# deflate/encryption deps that aren't needed for NumPy NPZ.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# NU5b Arrow interop: arrow-rs ffi feature exposes the Arrow C Data Interface
+# (FFI_ArrowSchema + FFI_ArrowArray + to_ffi/from_ffi). Matches chuks_arrow's
+# arrow = 53 so the produced CDI pair imports cleanly on that side.
+arrow = { version = "53", features = ["ffi"] }
 
 [profile.release]
 opt-level = 3

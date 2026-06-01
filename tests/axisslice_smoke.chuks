@@ -1,0 +1,23 @@
+import { NumPy } from "../src/index.chuks"
+const np = new NumPy("/Users/chukwuemekaigbokwe/Box/Code/ChuksPackages/chuks_numpy/shim")
+const c = np.from2d([[1.0,2.0,3.0,4.0,5.0,6.0,7.0],[8.0,9.0,10.0,11.0,12.0,13.0,14.0]])
+
+const ax0 = c.indices(0)
+const ax1 = c.indices(1)
+println("indices(0)=" + string(ax0))
+println("indices(1)=" + string(ax1))
+
+const rows01 = c.axisSlice(0, 0, 1, 1)
+println("axisSlice(0,0,1,1) shape=" + string(rows01.shape()))
+println("axisSlice(0,0,1,1) vals=" + string(rows01.toFloats()))
+
+const everyOther = c.axisSlice(1, 0, 7, 2)
+println("axisSlice(1,0,7,2) shape=" + string(everyOther.shape()))
+println("axisSlice(1,0,7,2) vals=" + string(everyOther.toFloats()))
+
+const iax = c.indices(1)
+const half = c.axisSlice(1, iax[0], iax[1]/2, iax[2])
+println("first half cols shape=" + string(half.shape()))
+println("first half cols vals=" + string(half.toFloats()))
+
+c.close(); rows01.close(); everyOther.close(); half.close()

@@ -1,0 +1,9 @@
+import { NumPy } from "src/index.chuks"
+const np = new NumPy()
+const a = np.from1d([1.0, 2.0, 3.0])
+println(a.dtype())      // float64
+println(a.itemsize())   // 8
+println(a.nbytes())     // 24
+println(a.size())       // 3
+println(a.ndim())       // 1
+a.close()
