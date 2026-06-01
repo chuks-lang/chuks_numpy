@@ -1,6 +1,6 @@
 {
   "name": "@chuks/numpy",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "visibility": "public",
   "description": "NumPy-style numerical computing for Chuks with n-dimensional arrays, broadcasting, slicing, vectorized math, reductions, linear algebra, FFTs, masked operations, random sampling, .npy/.npz IO, and Arrow export.",
   "entry": "src/index.chuks",
