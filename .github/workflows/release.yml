@@ -39,6 +39,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + all remote branches. `chuks publish` verifies the
+          # tagged commit is on a remote branch via `git branch -r --contains`,
+          # which is empty in the default shallow detached-HEAD tag checkout.
+          fetch-depth: 0
 
       - name: Install chuks CLI
         shell: bash
