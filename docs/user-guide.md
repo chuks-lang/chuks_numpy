@@ -50,7 +50,7 @@ Three consequences:
   [§15](#15-memory-model-and-close).
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 const a = np.from1d([1.0, 2.0, 3.0])
@@ -113,7 +113,7 @@ otherwise.
 | `a.ndim()`    | `int`   | number of dimensions                          |
 | `a.shape()`   | `[]int` | per-axis sizes, e.g. `[2, 3, 4]`              |
 | `a.dim(axis)` | `int`   | size of one axis, `-1` if `axis` out of range |
-| `a.size()`     | `int`   | total elements (product of `shape`)           |
+| `a.size()`    | `int`   | total elements (product of `shape`)           |
 
 ```chuks
 const a = np.zeros([2, 3, 4])
@@ -505,7 +505,7 @@ servers.
 | ---------------------------------------------------- | --------------------------------- |
 | `get(idxs)` wrong rank or out of range               | returns `0.0`, no throw           |
 | `set(idxs, v)` wrong rank or out of range            | returns `false`, no throw         |
-| `reshape(s)` when `product(s) != size()`              | throws `Error`                    |
+| `reshape(s)` when `product(s) != size()`             | throws `Error`                    |
 | `from2d` with ragged rows                            | throws `Error("…ragged rows…")`   |
 | `fromNd(s, v)` with `product(s) != v.length`         | throws `Error("…shape product…")` |
 | Broadcasting incompatible shapes in `add`/`mul`/…    | Rust kernel throws                |

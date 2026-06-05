@@ -4,14 +4,14 @@
 to construct arrays and call algorithms.
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 const np = new NumPy()
 ```
 
 The constructor takes an optional shim-manifest directory:
 
 ```chuks
-new NumPy(shimManifestDir: string = "chuks_packages/chuks_numpy")
+new NumPy(shimManifestDir: string = "chuks_packages/@chuks/numpy")
 ```
 
 You only need to override it when calling from outside the standard

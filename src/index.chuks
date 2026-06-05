@@ -759,12 +759,12 @@ export class NDArray {
              load it. `shimManifestDir` is the directory containing Cargo.toml.
              
              When called with no argument, defaults to the package's install
-             directory (`chuks_packages/chuks_numpy`), where the registry-shipped
+             directory (`chuks_packages/@chuks/numpy`), where the registry-shipped
              prebuilt (`.prebuilt/<os>-<arch>/lib*.{dylib|so|dll}`) is
              auto-discovered by `r.cargoBuild`. Pass an explicit absolute path
              only when developing the shim locally.
              */
-            constructor(shimManifestDir: string = "chuks_packages/chuks_numpy") {
+            constructor(shimManifestDir: string = "chuks_packages/@chuks/numpy") {
                 const libPath: string = r.cargoBuild(shimManifestDir, true)
                 this._lib = c.load(libPath)
                 const L: LibHandle = this._lib

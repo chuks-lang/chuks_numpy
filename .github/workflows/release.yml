@@ -4,21 +4,56 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      chuks_version:
+        description: "chuks CLI version used to BUILD & PUBLISH (e.g. v0.1.0 or 'latest'). This is the compiler version — NOT the numpy package version."
+        required: false
+        type: string
+        default: "v0.1.0"
 
 jobs:
+  # ── Resolve the chuks CLI (compiler) version — single source of truth ──────
+  # IMPORTANT: this is the COMPILER version, completely independent of the
+  # package tag / chuks.json version. While chuks is in pre-release we pin
+  # v0.1.0; switch this to "latest" once a stable chuks release ships.
+  setup:
+    name: Resolve chuks CLI version
+    runs-on: ubuntu-22.04
+    outputs:
+      chuks_version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ github.event.inputs.chuks_version }}"
+          if [[ -z "$VER" ]]; then
+            VER="v0.1.0" # default for tag-triggered runs (pre-release pin)
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "chuks CLI version: $VER"
+
   publish-source:
     name: Publish source tarball
+    needs: setup
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install chuks CLI
         shell: bash
+        env:
+          CHUKS_VERSION: ${{ needs.setup.outputs.chuks_version }}
         run: |
           set -euo pipefail
           BASE="chuks-linux-amd64"
-          curl -fsSL "https://github.com/chuks-programming-language/releases/releases/latest/download/${BASE}.tar.gz" \
-            | tar -xz -C /tmp
+          REPO="chuks-programming-language/releases"
+          if [[ "$CHUKS_VERSION" == "latest" ]]; then
+            URL="https://github.com/$REPO/releases/latest/download/${BASE}.tar.gz"
+          else
+            URL="https://github.com/$REPO/releases/download/${CHUKS_VERSION}/${BASE}.tar.gz"
+          fi
+          curl -fsSL "$URL" | tar -xz -C /tmp
           mkdir -p "$HOME/chuks/bin"
           if [[ -d "/tmp/${BASE}" ]]; then
             mv "/tmp/${BASE}/chuks" "$HOME/chuks/bin/chuks"
@@ -29,6 +64,9 @@ jobs:
           echo "$HOME/chuks/bin" >> "$GITHUB_PATH"
           "$HOME/chuks/bin/chuks" --version || true
 
+      # PACKAGE version check: the git tag (e.g. v1.0.0) must equal chuks.json
+      # `version` (1.0.0). This is the numpy package version — unrelated to the
+      # chuks CLI version resolved above.
       - name: Verify chuks.json version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -62,10 +100,11 @@ jobs:
 
   publish-prebuilts:
     name: Publish prebuilts
-    needs: publish-source
+    needs: [setup, publish-source]
     uses: chuks-programming-language/shim-publish-action/.github/workflows/build.yml@v1
     with:
       shim-dir: shim
       release: true
+      chuks-version: ${{ needs.setup.outputs.chuks_version }}
     secrets:
       CHUKS_TOKEN: ${{ secrets.CHUKS_TOKEN }}

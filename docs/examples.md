@@ -6,7 +6,7 @@ Every snippet below is self-contained. Save as e.g. `app.chuks` and run
 ## 1. Hello, arrays
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -25,7 +25,7 @@ a.close()
 ## 2. Reshaping & slicing
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -46,7 +46,7 @@ m.close(); block.close(); cols.close()
 ## 3. Broadcasting & chained scalar math
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -65,7 +65,7 @@ x.close(); z.close()
 ## 4. Axis reductions
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -89,7 +89,7 @@ grades.close(); perStudent.close(); perSubject.close()
 ## 5. In-place updates (hot loop)
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -108,7 +108,7 @@ buf.close(); inc.close()
 ## 6. Linear algebra — solve a system
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -126,7 +126,7 @@ A.close(); b.close(); x.close()
 ## 7. SVD + low-rank reconstruction
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -147,7 +147,7 @@ svd.close(); A.close()
 ## 8. FFT round-trip
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -164,7 +164,7 @@ x.close(); X.close(); xr.close()
 ## 9. Masks + `where` / `clip` / `maskedAssign`
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -190,7 +190,7 @@ a.close(); clipped.close(); zeros.close(); relu.close(); mask.close()
 ## 10. Random sampling & summary stats
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 np.seed(42)
@@ -207,7 +207,7 @@ samples.close()
 ## 11. Persist with `.npz`
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -237,8 +237,8 @@ Hands an `NDArray`'s buffer to a `chuks_arrow.Float64Array` through the
 No copy.
 
 ```chuks
-import { NumPy } from "chuks_numpy"
-import { Arrow } from "chuks_arrow"
+import { NumPy } from "pkg/@chuks/numpy"
+import { Arrow } from "pkg/@chuks/arrow"
 import { ArrowSchema, ArrowArray } from "std/chuksArrow"
 
 const np = new NumPy()
@@ -270,7 +270,7 @@ inputs, call `.reshape([len])` and/or `.copy()` first.
 ## 13. End-to-end: PCA-style centering + SVD
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 np.seed(7)

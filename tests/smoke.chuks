@@ -1,4 +1,4 @@
-import { NumPy } from "src/index.chuks"
+import { NumPy } from "../src/index.chuks"
 const np = new NumPy()
 const a = np.from1d([1.0, 2.0, 3.0])
 println(a.dtype())      // float64

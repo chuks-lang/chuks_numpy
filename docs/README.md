@@ -17,7 +17,7 @@ Rust cdylib shim around the `ndarray`, `nalgebra`, and `rustfft` crates.
 ## At a glance
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 

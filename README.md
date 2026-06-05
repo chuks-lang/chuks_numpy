@@ -2,7 +2,7 @@
 
 NumPy-style n-dimensional arrays for [Chuks](https://chuks.org), backed by a Rust cdylib shim around the [`ndarray`](https://crates.io/crates/ndarray), [`nalgebra`](https://crates.io/crates/nalgebra), and [`rustfft`](https://crates.io/crates/rustfft) crates.
 
-> **Status:** v1.0.0 — Phases NU0–NU5b shipped (263/263 tests pass VM + AOT, including a 9-test cross-package round-trip with `chuks_arrow`).
+> **Status:** v1.0.0 — Phases NU0–NU5b shipped (263/263 tests pass VM + AOT, including a 9-test cross-package round-trip with `@chuks/arrow`).
 
 ## Roadmap
 
@@ -19,18 +19,13 @@ NumPy-style n-dimensional arrays for [Chuks](https://chuks.org), backed by a Rus
 ## Install
 
 ```jsonc
-// chuks.json
-{
-  "dependencies": {
-    "chuks_numpy": "1.0.0",
-  },
-}
+ chuks add @chuks/numpy
 ```
 
 ## Quick start
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -87,8 +82,8 @@ a2.close(); loadedA.close()
 Export a 1-D `NDArray<f64>` to a `chuks_arrow.Float64Array` through the Arrow C Data Interface — no buffer copy. The NDArray's underlying `Vec<f64>` is handed to Arrow; closing the resulting Arrow array invokes the release callback that frees it.
 
 ```chuks
-import { NumPy } from "chuks_numpy"
-import { Arrow } from "chuks_arrow"
+import { NumPy } from "pkg/@chuks/numpy"
+import { Arrow } from "pkg/@chuks/arrow"
 import { ArrowSchema, ArrowArray } from "std/chuksArrow"
 
 const np = new NumPy()
@@ -115,15 +110,6 @@ nd.close()        // no-op (already consumed)
 ```
 
 Constraints: input must be 1-D and C-contiguous with zero offset. For higher-rank or sliced inputs, call `.reshape([len])` and/or `.copy()` first to normalize.
-
-## Building the shim
-
-The shim is built on first import via `r.cargoBuild()` and cached. To build manually:
-
-```bash
-cd chuks_numpy/shim
-cargo build --release
-```
 
 ## Tests
 

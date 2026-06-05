@@ -5,31 +5,13 @@
 Add to your project's `chuks.json`:
 
 ```jsonc
-{
-  "dependencies": {
-    "chuks_numpy": "1.0.0",
-  },
-}
-```
-
-Then run:
-
-```bash
-chuks add chuks_numpy
-```
-
-On first import, the Rust shim is built automatically and cached.
-To rebuild manually:
-
-```bash
-cd chuks_packages/chuks_numpy/shim
-cargo build --release
+chuks add @chuks/numpy
 ```
 
 ## Your first program
 
 ```chuks
-import { NumPy } from "chuks_numpy"
+import { NumPy } from "pkg/@chuks/numpy"
 
 const np = new NumPy()
 
@@ -102,7 +84,7 @@ println(c.toString())
 | `a.toFloats()`  | `[]float` — flat row-major copy of all elements |
 | `a.shape()`     | `[]int` — e.g. `[3, 2]`                         |
 | `a.ndim()`      | number of dimensions                            |
-| `a.size()`       | total element count                             |
+| `a.size()`      | total element count                             |
 | `a.get([i, j])` | single element                                  |
 
 ```chuks
