@@ -40,7 +40,6 @@ import { r } from "std/chuksToRust"
 // Owned f64 array handle. Wraps a Rust `ArrayD<f64>` via Box::into_raw.
 // Always call `close()` exactly once; reuse after close is undefined.
 
-@iterationCost("warning", "Iterating an NDArray element-by-element via .get() is ~100-1000x slower than bulk ops. Materialize once with .toFloats(), or use NumPy ufuncs (np.add/np.mul/np.dot/np.matmul) which compute in one call.", "ndarray.toFloats()  // flat row-major []float", "np.add(a, b) / np.dot(a, b)  // vectorized")
 export class NDArray {
     var _ptr: CPtr
     var _np: NumPy
@@ -126,6 +125,7 @@ export class NDArray {
      Read the element at `idxs`. Returns 0.0 if `idxs` is out of range or
      has wrong length. Length of `idxs` must equal ndim().
      */
+    @iterationCost("warning", "Iterating an NDArray element-by-element via .get() is ~100-1000x slower than bulk ops. Materialize once with .toFloats(), or use NumPy ufuncs (np.add/np.mul/np.dot/np.matmul) which compute in one call.", "ndarray.toFloats()  // flat row-major []float", "np.add(a, b) / np.dot(a, b)  // vectorized")
     public get(idxs: []int): float {
         this.__checkOpen()
         const buf: CPtr = this.__idxBuf(idxs)
